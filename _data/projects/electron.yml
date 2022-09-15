@@ -14,8 +14,8 @@ tags:
 - node.js
 - v8
 upforgrabs:
-  name: good first issue
-  link: https://github.com/electron/electron/labels/good%20first%20issue
+  name: beginner friendly
+  link: https://github.com/electron/electron/labels/beginner%20friendly
 stats:
-  issue-count: 10
-  last-updated: '2019-10-26T14:03:32Z'
+  issue-count: 13
+  last-updated: '2022-08-29T11:36:20Z'

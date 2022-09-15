@@ -10,8 +10,8 @@ tags:
 - components
 - web
 upforgrabs:
-  name: good first issue
-  link: https://github.com/symfony/symfony/labels/good%20first%20issue
+  name: Good first issue
+  link: https://github.com/symfony/symfony/labels/Good%20first%20issue
 stats:
-  issue-count: 12
-  last-updated: '2019-10-26T09:03:29Z'
+  issue-count: 8
+  last-updated: '2022-04-10T07:24:07Z'

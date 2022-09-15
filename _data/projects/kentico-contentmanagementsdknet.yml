@@ -15,7 +15,7 @@ tags:
 - caas
 upforgrabs:
   name: up-for-grabs
-  link: https://github.com/Kentico/content-management-sdk-net/labels/up-for-grabs
+  link: https://github.com/kontent-ai/management-sdk-net/labels/up-for-grabs
 stats:
-  issue-count: 2
-  last-updated: '2019-10-07T12:19:22Z'
+  issue-count: 1
+  last-updated: '2018-09-11T08:11:11Z'

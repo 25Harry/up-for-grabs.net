@@ -9,154 +9,92 @@ require 'graphql/client/http'
 
 require 'up_for_grabs_tooling'
 
-def find_values_to_query_api(project)
-  unless project.github_project?
-    puts "Skipping project #{project.relative_path} as UpForGrabs URL is not on GitHub"
+def update(project, apply_changes: false)
+  return unless project.github_project?
+
+  result = GitHubRepositoryLabelActiveCheck.run(project)
+
+  if result[:rate_limited]
+    puts 'This script is currently rate-limited by the GitHub API'
+    puts 'Marking as inconclusive to indicate that no further work will be done here'
+    exit 0
+  end
+
+  if result[:reason] == 'repository-missing'
+    puts "The GitHub repository '#{project.github_owner_name_pair}' cannot be found. Please confirm the location of the project."
     return
   end
 
-  owner_and_repo = project.github_owner_name_pair
+  obj = project.read_yaml
+  label = obj['upforgrabs']['name']
 
-  items = owner_and_repo.split('/')
-  owner = items[0]
-  name = items[1]
+  if result[:reason] == 'missing'
+    puts "The label '#{label}' for GitHub repository '#{project.github_owner_name_pair}' could not be found. Please ensure this points to a valid label used in the project."
+    return
+  end
 
-  yaml = project.read_yaml
-  label = yaml['upforgrabs']['name']
+  link = obj['upforgrabs']['link']
 
-  [owner, name, label]
-end
+  url = result[:url]
 
-def update_stats(project, repository, owner_and_repo, label)
-  if repository.nil?
-    puts "Cannot find repository for project '#{owner_and_repo}'"
-  elsif repository.label.nil?
-    puts "Cannot find label '#{label}' for project '#{owner_and_repo}'"
+  link_needs_rewriting = link != url && link.include?('/labels/')
+
+  unless apply_changes
+    if link_needs_rewriting
+      puts "The label link for '#{label}' in project '#{project.relative_path}' is out of sync with what is found in the 'upforgrabs' element. Ensure this is updated to '#{url}'"
+    end
+    return
+  end
+
+  obj.store('upforgrabs', 'name' => label, 'link' => url) if link_needs_rewriting
+
+  if result[:last_updated].nil?
+    obj.store('stats', 'issue-count' => result[:count])
   else
-    stats = {
-      count: repository.label.issues.total_count,
-      updated_at: repository.updated_at
-    }
-
-    project.update(stats) if $apply_changes
+    obj.store('stats', 'issue-count' => result[:count], 'last-updated' => result[:last_updated])
   end
+
+  project.write_yaml(obj)
 end
 
-def verify_project(project)
-  project.format_yaml
+current_repo = ENV.fetch('GITHUB_REPOSITORY', nil)
 
-  result = find_values_to_query_api(project)
-  return if result.nil?
-
-  owner, name, label = result
-
-  variables = { owner: owner, name: name, label: label }
-
-  result = $GraphQLClient.query(IssueCountForLabel, variables: variables)
-
-  update_stats(project, result.data.repository, "#{owner}/#{name}", label)
-
-  rate_limit = result.data.rate_limit
-  resets_in = Time.parse(rate_limit.reset_at) - Time.now
-
-  limit = rate_limit.limit
-  remaining = rate_limit.remaining
-
-  remaining_percent = (remaining * 100) / limit
-
-  puts "Rate limit: #{remaining}/#{limit} - #{resets_in.to_i}s before reset" if (remaining % 10).zero? && remaining_percent < 20
-
-  if remaining.zero?
-    puts 'This script is currently rate-limited by the GitHub API'
-    puts 'Marking as inconclusive to indicate that no further work will be done here'
-    exit 78
-  end
-rescue Psych::SyntaxError => e
-  puts "Unable to parse the contents of file #{project.relative_path} - Line: #{e.line}, Offset: #{e.offset}, Problem: #{e.problem}"
-rescue GraphQL::Client::Error => e
-  puts "GraphQL exception for file #{project.relative_path}: '#{e}'"
-rescue StandardError => e
-  puts "Unknown exception for file #{project.relative_path}: '#{e}'"
-end
-
-repo = ENV['GITHUB_REPOSITORY']
-
-puts "Inspecting projects files for '#{repo}'"
+puts "Inspecting projects files for '#{current_repo}'"
 
 start = Time.now
 
-$client = Octokit::Client.new(access_token: ENV['GITHUB_TOKEN'])
+root_directory = ENV.fetch('GITHUB_WORKSPACE', nil)
+apply_changes = ENV.fetch('APPLY_CHANGES', false)
+token = ENV.fetch('GITHUB_TOKEN', nil)
 
-HTTP = GraphQL::Client::HTTP.new('https://api.github.com/graphql') do
-  def headers(_context)
-    # Optionally set any HTTP headers
-    {
-      "User-Agent": 'shiftkey-testing-graphql-things',
-      "Authorization": "bearer #{ENV['GITHUB_TOKEN']}"
-    }
-  end
-end
-
-Schema = GraphQL::Client.load_schema(HTTP)
-
-$GraphQLClient = GraphQL::Client.new(schema: Schema, execute: HTTP)
-
-IssueCountForLabel = $GraphQLClient.parse <<-'GRAPHQL'
-  query($owner: String!, $name: String!, $label: String!) {
-    repository(owner: $owner, name: $name) {
-      updatedAt
-      label(name: $label) {
-        issues(states: OPEN) {
-          totalCount
-        }
-      }
-    }
-    rateLimit {
-      limit
-      cost
-      remaining
-      resetAt
-    }
-  }
-GRAPHQL
-
-$root_directory = ENV['GITHUB_WORKSPACE']
-$verbose = ENV['VERBOSE_OUTPUT']
-$apply_changes = ENV['APPLY_CHANGES']
-
-current_repo = ENV['GITHUB_REPOSITORY']
-
-client = Octokit::Client.new(access_token: ENV['GITHUB_TOKEN'])
+client = Octokit::Client.new(access_token: token)
 prs = client.pulls current_repo
 
-found_pr = prs.find { |pr| pr.title == 'Updated project stats' && pr.user.login == 'github-actions[bot]' }
+found_pr = prs.find { |pr| pr.title == 'Updated project stats' && pr.user.login == 'shiftbot' }
 
 if found_pr
   puts "There is a current PR open to update stats ##{found_pr.number} - review and merge that before we go again"
-  exit 78
+  exit 0
 end
 
-projects = Dir["#{$root_directory}/_data/projects/*.yml"].map do |f|
-  relative_path = Pathname.new(f).relative_path_from($root_directory).to_s
-  Project.new(relative_path, f)
-end
+projects = Project.find_in_directory(root_directory)
 
-projects.each { |p| verify_project(p) }
+projects.each { |p| update(p, apply_changes: apply_changes) }
 
-unless $apply_changes
+unless apply_changes
   puts 'APPLY_CHANGES environment variable unset, exiting instead of making a new PR'
-  exit 78
+  exit 0
 end
 
 clean = true
 
 branch_name = Time.now.strftime('updated-stats-%Y%m%d')
 
-Dir.chdir($root_directory) do
-  system('git config --global user.name "github-actions"')
-  system('git config --global user.email "github-actions@users.noreply.github.com"')
+Dir.chdir(root_directory) do
+  system('git config --global user.name "shiftbot"')
+  system('git config --global user.email "12331315+shiftbot@users.noreply.github.com"')
 
-  system("git remote set-url origin 'https://x-access-token:#{ENV['GITHUB_TOKEN']}@github.com/#{current_repo}.git'")
+  system("git remote set-url origin 'https://x-access-token:#{token}@github.com/#{current_repo}.git'")
 
   clean = system('git diff --quiet > /dev/null')
 
